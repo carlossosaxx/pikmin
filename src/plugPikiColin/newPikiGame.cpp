@@ -14,6 +14,8 @@
 #include "MapMgr.h"
 #include "MemStat.h"
 #include "Menu.h"
+#include "Mod/Coop.h"
+#include "Mod/FirstPerson.h"
 #include "MoviePlayer.h"
 #include "NaviMgr.h"
 #include "Pcam/Camera.h"
@@ -1999,6 +2001,9 @@ public:
 	virtual void draw(Graphics& gfx) // _14
 	{
 		Matrix4f orthoMtx;
+#if MOD_COOP
+		ModCoop::sIsSplitFrame = false;
+#endif
 
 		if (!gameflow.mIsUIOverlayActive || gameflow.mIsTutorialTextActive) {
 			// update any cutscenes or text demos
@@ -2063,10 +2068,32 @@ public:
 				// no scene or active transition, so set to player cam
 				gameflow.mMoviePlayer->setGameCamInfo(true, cameraMgr->mCamera->getFov(), cameraMgr->mCamera->getViewpoint(),
 				                                      cameraMgr->mCamera->getWatchpoint());
+#if MOD_COOP
+				// Split only during normal play: cutscenes and their transitions stay full screen.
+				ModCoop::sIsSplitFrame = ModCoop::sSplitScreen && ModCoop::sCamera2 && canDrawSplitScreen();
+#endif
 			}
 
 			gfx.setCamera(&mGameCamera);
+#if MOD_COOP || MOD_FIRSTPERSON
+			f32 aspect   = f32(gfx.mScreenWidth) / f32(gfx.mScreenHeight);
+			f32 nearClip = 100.0f;
+#if MOD_FIRSTPERSON
+			if (ModFP::needsNearClip()) {
+				nearClip = ModFP::NearClip;
+			}
+#endif
+#if MOD_COOP
+			if (ModCoop::sIsSplitFrame) {
+				// Each player gets the full width and half the height.
+				aspect *= 2.0f;
+				ModCoop::sCamera2->update(aspect, ModCoop::sCamera2->mFov, nearClip, mCameraFarClip);
+			}
+#endif
+			mGameCamera.update(aspect, mGameCamera.mFov, nearClip, mCameraFarClip);
+#else
 			mGameCamera.update(f32(gfx.mScreenWidth) / f32(gfx.mScreenHeight), mGameCamera.mFov, 100.0f, mCameraFarClip);
+#endif
 		}
 
 		// do any pre-rendering, assuming we're not in a cutscene
@@ -2079,7 +2106,15 @@ public:
 		// do the main frame render
 
 		MATCHING_START_TIMER("mainRender", true);
+#if MOD_COOP
+		if (ModCoop::sIsSplitFrame) {
+			mainRenderSplit(gfx);
+		} else {
+			mainRender(gfx);
+		}
+#else
 		mainRender(gfx);
+#endif
 		MATCHING_STOP_TIMER("mainRender");
 
 		// try and update and draw effects
@@ -2099,7 +2134,14 @@ public:
 			}
 
 			MATCHING_START_TIMER("eff draw", true);
+#if MOD_COOP
+			// Split screen already drew effects into each half.
+			if (!ModCoop::sIsSplitFrame) {
+				effectMgr->draw(gfx);
+			}
+#else
 			effectMgr->draw(gfx);
+#endif
 			MATCHING_STOP_TIMER("eff draw");
 		}
 
@@ -2297,6 +2339,67 @@ public:
 			gfx.flushCachedShapes();
 		}
 	}
+
+#if MOD_COOP
+	/**
+	 * @brief Whether the frame is normal gameplay that can be split (no menu, memory card screen or movie).
+	 */
+	bool canDrawSplitScreen()
+	{
+#if defined(VERSION_PIKIDEMO)
+		return !(gameflow.mDemoFlags & CinePlayerFlags::NonGameMovie) && !gameflow.mMoviePlayer->mIsActive;
+#else
+		return !memcardWindow && !(gameflow.mDemoFlags & CinePlayerFlags::NonGameMovie) && !gameflow.mMoviePlayer->mIsActive;
+#endif
+	}
+
+	/**
+	 * @brief Co-op split screen: draws the whole scene twice, player 1 on the top half and
+	 * player 2 on the bottom, each from their own camera. Mirrors `mainRender`.
+	 * @param gfx Graphics context for rendering.
+	 */
+	void mainRenderSplit(Graphics& gfx)
+	{
+		gfx.setViewport(AREA_FULL_SCREEN(gfx));
+		gfx.setScissor(AREA_FULL_SCREEN(gfx));
+		gfx.setClearColour(COLOUR_TRANSPARENT);
+		gfx.clearBuffer(Graphics::ClearBufferFlag::Both, false);
+
+		bool isTimeMoving = true;
+		if (playerState->isTutorial() && !gameflow.mIsDayEndActive) {
+			isTimeMoving = false;
+		}
+
+		int halfHeight = gfx.mScreenHeight / 2;
+		for (int i = 0; i < ModCoop::NaviCount; i++) {
+			Camera* cam = (i == 0) ? &mGameCamera : ModCoop::sCamera2;
+			RectArea area(0, i * halfHeight, gfx.mScreenWidth, (i + 1) * halfHeight);
+#if MOD_FIRSTPERSON
+			ModFP::sRenderView = &ModFP::sViews[i];
+#endif
+			gfx.setCamera(cam);
+			gfx.setViewport(area);
+			gfx.setScissor(area);
+			gfx.setPerspective(cam->mPerspectiveMatrix.mMtx, cam->mFov, cam->mAspectRatio, cam->mNear, cam->mFar, 1.0f);
+			mapMgr->mDayMgr->refresh(gfx, isTimeMoving ? gameflow.mWorldClock.mTimeOfDay : TUTORIAL_TIME_OF_DAY, 8);
+			mCameraFarClip = 10000.0f;
+
+			Node::draw(gfx);
+			if (effectMgr) {
+				effectMgr->draw(gfx);
+			}
+		}
+
+		// Back to one full-screen camera for the HUD and menus.
+#if MOD_FIRSTPERSON
+		ModFP::sRenderView = &ModFP::sViews[0];
+#endif
+		gfx.setCamera(&mGameCamera);
+		gfx.setViewport(AREA_FULL_SCREEN(gfx));
+		gfx.setScissor(AREA_FULL_SCREEN(gfx));
+		mGameCamera.mAspectRatio = f32(gfx.mScreenWidth) / f32(gfx.mScreenHeight);
+	}
+#endif
 
 	/**
 	 * @brief Performs any post-rendering, primarily for overlays and things to be drawn on top of regular frame drawing.

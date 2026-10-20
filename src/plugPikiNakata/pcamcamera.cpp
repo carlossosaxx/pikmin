@@ -3,6 +3,8 @@
 #include "DebugLog.h"
 #include "FlowController.h"
 #include "Graphics.h"
+#include "Mod/Coop.h"
+#include "Mod/FirstPerson.h"
 #include "NaviMgr.h"
 #include "ParaParameters.h"
 #include "Pcam/Camera.h"
@@ -12,6 +14,10 @@
 #include "nlib/System.h"
 #include "sysNew.h"
 #include <limits.h>
+
+#if MOD_FIRSTPERSON
+#include "Pcam/CameraManager.h"
+#endif
 
 /**
  * @todo: Documentation
@@ -24,6 +30,87 @@ DEFINE_ERROR(__LINE__) // Never used in the DLL
  * @note UNUSED Size: 0000F4
  */
 DEFINE_PRINT("pcamcamera")
+
+#if MOD_FIRSTPERSON
+namespace ModFP {
+View sViews[MaxViews] = {
+	{ true, false, 0.0f, 0.0f },
+	{ true, false, 0.0f, 0.0f },
+};
+View* sRenderView = &sViews[0];
+
+View& getView(PcamCamera* camera)
+{
+#if MOD_COOP
+	if (camera == ModCoop::sPcam2) {
+		return sViews[1];
+	}
+#endif
+	return sViews[0];
+}
+
+View* getActiveViewFor(Creature* navi)
+{
+	if (cameraMgr && cameraMgr->mCamera->mTargetCreature == navi && sViews[0].mIsActive) {
+		return &sViews[0];
+	}
+#if MOD_COOP
+	// Player 2 only has their own camera in split screen; otherwise they share player 1's.
+	if (ModCoop::sPcam2 && ModCoop::sSplitScreen && ModCoop::sPcam2->mTargetCreature == navi && sViews[1].mIsActive) {
+		return &sViews[1];
+	}
+#endif
+	return nullptr;
+}
+
+bool needsNearClip()
+{
+	if (sViews[0].mIsActive) {
+		return true;
+	}
+#if MOD_COOP
+	if (ModCoop::sSplitScreen && sViews[1].mIsActive) {
+		return true;
+	}
+#endif
+	return false;
+}
+
+bool cStickIsLook(Controller& controller)
+{
+	return !controller.keyDown(KBBTN_Z);
+}
+
+void updateLook(View& view, Controller& controller, f32 frameTime)
+{
+	if (controller.keyClick(KBBTN_DPAD_UP)) {
+		view.mEnabled = !view.mEnabled;
+	}
+
+	if (!view.mEnabled || !cStickIsLook(controller)) {
+		return;
+	}
+
+	f32 lookX = controller.getSubStickX();
+	f32 lookY = controller.getSubStickY();
+	if (NMath<f32>::absolute(lookX) < StickDeadZone) {
+		lookX = 0.0f;
+	}
+	if (NMath<f32>::absolute(lookY) < StickDeadZone) {
+		lookY = 0.0f;
+	}
+
+	// Increasing yaw turns left (forward is (sin yaw, 0, cos yaw)), so pushing right subtracts.
+	view.mYaw = NMathF::roundAngle(view.mYaw - lookX * YawSpeed * frameTime);
+	view.mPitch += lookY * PitchSpeed * frameTime;
+	if (view.mPitch < MinPitch) {
+		view.mPitch = MinPitch;
+	} else if (view.mPitch > MaxPitch) {
+		view.mPitch = MaxPitch;
+	}
+}
+} // namespace ModFP
+#endif
 
 /**
  * @todo: Documentation
@@ -139,12 +226,34 @@ void PcamCamera::startCamera(Creature* target, int zoom, int angle)
 		mTimers[i] = 0.0f;
 	}
 
+#if MOD_COOP
+	// Keep both players in frame on the shared camera (the original only did this for its
+	// unfinished versus mode). startCamera runs every day, so only add them once.
+	if (this != ModCoop::sPcam2 && mCreatureArray->getSize() == 0) {
+		mCreatureArray->add(naviMgr->getNavi(0));
+		mCreatureArray->add(naviMgr->getNavi(1));
+	}
+#else
 	if (flowCont.mIsVersusMode == TRUE) {
 		mCreatureArray->add(naviMgr->getNavi(0));
 		mCreatureArray->add(naviMgr->getNavi(1));
 	}
+#endif
 
 	makeCurrentPosition(target->mFaceDirection + NMathF::pi);
+
+#if MOD_FIRSTPERSON
+	ModFP::View& view = ModFP::getView(this);
+	view.mYaw         = target->mFaceDirection;
+	view.mPitch       = -0.2f;
+#endif
+
+#if MOD_COOP
+	// Whenever player 1's camera restarts (each day, after cutscenes), restart player 2's too.
+	if (this != ModCoop::sPcam2 && ModCoop::sPcam2 && ModCoop::sPlayer2) {
+		ModCoop::sPcam2->startCamera(ModCoop::sPlayer2, zoom, angle);
+	}
+#endif
 }
 
 /**
@@ -212,6 +321,18 @@ void PcamCamera::control(Controller& controller)
 	if (controller.keyDown(KBBTN_X)) {
 		xSubY = controller.getSubStickY();
 	}
+#if MOD_FIRSTPERSON
+	ModFP::View& view = ModFP::getView(this);
+	ModFP::updateLook(view, controller, NSystem::getFrameTime());
+	if (view.mEnabled) {
+		// L snaps the view to where Olimar is facing, like the third-person "attention" snap.
+		if (controller.keyClick(KBBTN_L) && mTargetCreature) {
+			view.mYaw = mTargetCreature->mFaceDirection;
+		}
+		// Zoom, angle and orbit controls make no sense in first person.
+		return;
+	}
+#endif
 	PcamControlInfo info;
 	info.init(true, doRotate, controller.keyClick(KBBTN_L) != 0, controller.keyClick(KBBTN_R) && !controller.keyDown(KBBTN_X), isZClick,
 	          false, false, controller.getMainStickX(), xSubY, controller.getSubStickY());
@@ -288,6 +409,35 @@ void PcamCamera::playCameraSound(int soundID)
  */
 void PcamCamera::update()
 {
+#if MOD_FIRSTPERSON
+	ModFP::View& view = ModFP::getView(this);
+	view.mIsActive    = false;
+	if (view.mEnabled && mTargetCreature) {
+		updateTimers();
+
+		Vector3f& feet = mTargetCreature->getPosition();
+		f32 sinYaw     = sinf(view.mYaw);
+		f32 cosYaw     = cosf(view.mYaw);
+		f32 cosPitch   = cosf(view.mPitch);
+
+		NVector3f eye(feet.x + sinYaw * ModFP::EyeForward, feet.y + ModFP::EyeHeight, feet.z + cosYaw * ModFP::EyeForward);
+		NVector3f watch(eye.x + sinYaw * cosPitch * ModFP::LookDistance, eye.y + sinf(view.mPitch) * ModFP::LookDistance,
+		                eye.z + cosYaw * cosPitch * ModFP::LookDistance);
+		inputViewpoint(eye);
+		inputWatchpoint(watch);
+		setFov(ModFP::Fov);
+		setBlur(0.0f);
+
+		// Keep the third-person orbit behind the look direction, so toggling back is seamless.
+		mPolarDir.mAzimuth = view.mYaw + NMathF::pi;
+		mPolarDir.roundAzimuth();
+
+		makeMatrix();
+		makeCamera();
+		view.mIsActive = true;
+		return;
+	}
+#endif
 	mCurrDistance = calcCurrentDistance();
 	if (mToggleZoomPending == TRUE) {
 		mZoomLevel++;
@@ -385,6 +535,12 @@ void PcamCamera::makePolarRadius()
  */
 void PcamCamera::makeWatchObjectViewpoint(NVector3f& watchPt, NVector3f& viewPt)
 {
+#if MOD_COOP
+	// In split screen each camera follows only its own player.
+	if (ModCoop::sSplitScreen) {
+		return;
+	}
+#endif
 	if (mCreatureArray->getSize()) {
 		NVector3f viewToWatchDir(viewPt, watchPt);
 		viewToWatchDir.normalize();

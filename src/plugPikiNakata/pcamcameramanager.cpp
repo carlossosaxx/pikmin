@@ -1,4 +1,5 @@
 #include "DebugLog.h"
+#include "Mod/Coop.h"
 #include "NaviMgr.h"
 #include "Pcam/Camera.h"
 #include "Pcam/CameraManager.h"
@@ -6,6 +7,11 @@
 #include "Peve/Condition.h"
 #include "Peve/Event.h"
 #include "sysNew.h"
+
+#if MOD_COOP
+#include "Kontroller.h"
+#include "Navi.h"
+#endif
 
 /**
  * @todo: Documentation
@@ -77,6 +83,16 @@ void PcamCameraManager::update()
 	mCamera->control(*mController);
 	mCamera->update();
 	updateVibrationEvent();
+
+#if MOD_COOP
+	// Player 2's own camera, driven by their controller. Only drawn in split screen, but kept
+	// up to date so switching to split screen is seamless.
+	ModCoop::update(*mController, mCamera->mCamera);
+	if (ModCoop::sPcam2 && ModCoop::sPlayer2) {
+		ModCoop::sPcam2->control(*ModCoop::sPlayer2->mKontroller);
+		ModCoop::sPcam2->update();
+	}
+#endif
 }
 
 /**
