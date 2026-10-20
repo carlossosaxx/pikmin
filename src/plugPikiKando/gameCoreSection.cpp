@@ -59,6 +59,8 @@
 #if MOD_COOP
 #include "CPlate.h"
 #include "MapMgr.h"
+#include "Material.h"
+#include "Shape.h"
 
 namespace ModCoop {
 Navi* sPlayer2     = nullptr;
@@ -79,17 +81,9 @@ void update(Controller& player1Controller, Camera* sharedCamera)
 	}
 }
 
-void placePlayer2BesidePlayer1(Navi* player1)
+static void putPlayer2At(Vector3f pos, f32 face)
 {
-	if (!sPlayer2 || !player1) {
-		return;
-	}
-
-	// Stand to player 1's right: forward is (sin, 0, cos), so right is (-cos, 0, sin).
-	f32 face = player1->mFaceDirection;
-	Vector3f side(-cosf(face), 0.0f, sinf(face));
-	Vector3f pos = player1->mSRT.t + side * SpawnSideOffset;
-	pos.y        = mapMgr->getMinY(pos.x, pos.z, true);
+	pos.y = mapMgr->getMinY(pos.x, pos.z, true);
 
 	sPlayer2->mSRT.t          = pos;
 	sPlayer2->mDayEndPosition = pos;
@@ -102,6 +96,103 @@ void placePlayer2BesidePlayer1(Navi* player1)
 	// Snap player 2's camera to their new spot instead of swooping across the map.
 	if (sPcam2) {
 		sPcam2->makeCurrentPosition(face + PI);
+	}
+}
+
+void placePlayer2BesidePlayer1(Navi* player1)
+{
+	if (!sPlayer2 || !player1) {
+		return;
+	}
+
+	// Stand to player 1's right: forward is (sin, 0, cos), so right is (-cos, 0, sin).
+	f32 face = player1->mFaceDirection;
+	Vector3f side(-cosf(face), 0.0f, sinf(face));
+	putPlayer2At(player1->mSRT.t + side * SpawnSideOffset, face);
+}
+
+void respawnPlayer2()
+{
+	if (!sPlayer2) {
+		return;
+	}
+
+	sPlayer2->mHealth = C_NAVI_PARM(sPlayer2, mHealth);
+	sPlayer2->mVelocity.set(0.0f, 0.0f, 0.0f);
+	sPlayer2->mTargetVelocity.set(0.0f, 0.0f, 0.0f);
+
+	// Same spot the game uses for Olimar at the start of a day: just in front of the ship.
+	UfoItem* ufo = itemMgr ? itemMgr->getUfo() : nullptr;
+	if (ufo) {
+		f32 face = ufo->mFaceDirection;
+		Vector3f dir(sinf(face), 0.0f, cosf(face));
+		putPlayer2At(ufo->mSRT.t + dir * 50.0f, face);
+	} else {
+		placePlayer2BesidePlayer1(naviMgr->getNavi());
+	}
+}
+
+void drawPlayer2Hud(Graphics& gfx)
+{
+	if (!sPlayer2) {
+		return;
+	}
+
+	f32 maxHealth = C_NAVI_PARM(sPlayer2, mHealth);
+	f32 ratio     = (maxHealth > 0.0f) ? sPlayer2->mHealth / maxHealth : 0.0f;
+	if (ratio < 0.0f) {
+		ratio = 0.0f;
+	} else if (ratio > 1.0f) {
+		ratio = 1.0f;
+	}
+
+	// Bottom-left of player 2's half in split screen, otherwise the bottom-right corner.
+	const int width  = 120;
+	const int height = 10;
+	int x            = sIsSplitFrame ? 40 : gfx.mScreenWidth - width - 40;
+	int y            = gfx.mScreenHeight - 40;
+
+	gfx.useTexture(nullptr, GX_TEXMAP0);
+	gfx.setColour(Colour(0, 0, 0, 160), true);
+	gfx.fillRectangle(RectArea(x - 2, y - 2, x + width + 2, y + height + 2));
+
+	if (ratio < 0.5f) {
+		gfx.setColour(Colour(230, 60, 40, 255), true);
+	} else {
+		gfx.setColour(Colour(80, 220, 90, 255), true);
+	}
+	gfx.fillRectangle(RectArea(x, y, x + int(width * ratio), y + height));
+
+	gfx.setColour(COLOUR_WHITE, true);
+	gfx.setAuxColour(COLOUR_WHITE);
+	gfx.texturePrintf(gsys->mConsFont, x, y - 18, "2P");
+}
+
+// Colours saved by tintPlayer2 so they can be put back. Olimar's model has a few dozen materials.
+static Colour sSavedColours[64];
+
+void tintPlayer2(Navi* navi, bool apply)
+{
+	if (navi != sPlayer2 || !navi->mNaviShapeObject) {
+		return;
+	}
+
+	// Both Olimars share one model, so the tint goes on just before player 2 draws and comes off after.
+	Shape* shape = navi->mNaviShapeObject->mShape;
+	int count    = shape->mMaterialCount;
+	if (count > 64) {
+		count = 64;
+	}
+	for (int i = 0; i < count; i++) {
+		Colour& col = shape->mMaterialList[i].colour();
+		if (apply) {
+			sSavedColours[i] = col;
+			col.r            = u8(col.r * Player2TintR / 255);
+			col.g            = u8(col.g * Player2TintG / 255);
+			col.b            = u8(col.b * Player2TintB / 255);
+		} else {
+			col = sSavedColours[i];
+		}
 	}
 }
 } // namespace ModCoop
@@ -2041,6 +2132,10 @@ void GameCoreSection::draw2D(Graphics& gfx)
 		int state       = s->getID();
 		if (state != NAVISTATE_DemoSunset) {
 			mDrawGameInfo->draw(gfx);
+#if MOD_COOP
+			gfx.setOrthogonal(orthoMtx.mMtx, AREA_FULL_SCREEN(gfx));
+			ModCoop::drawPlayer2Hud(gfx);
+#endif
 		}
 		gfx.setOrthogonal(orthoMtx.mMtx, AREA_FULL_SCREEN(gfx));
 		containerWindow->draw(gfx);

@@ -18,6 +18,7 @@
 #include "Kontroller.h"
 #include "MapCode.h"
 #include "MemStat.h"
+#include "Mod/Coop.h"
 #include "Mod/FirstPerson.h"
 #include "MoviePlayer.h"
 #include "NaviMgr.h"
@@ -72,6 +73,47 @@ static bool isFirstPersonNavi(Navi* navi)
 {
 	return ModFP::getActiveViewFor(navi) != nullptr;
 }
+
+/**
+ * @brief Where the look ray from a first-person view first meets the ground, as an offset from the navi.
+ *
+ * Steps along the ray and checks the map height under each step, so slopes and ledges are handled.
+ * If the ray never lands within `maxDist`, the cursor goes to `maxDist` straight ahead.
+ */
+static Vector3f calcFirstPersonCursor(Navi* navi, ModFP::View& view, f32 maxDist)
+{
+	const f32 step = 10.0f;
+	f32 sinYaw     = sinf(view.mYaw);
+	f32 cosYaw     = cosf(view.mYaw);
+	f32 cosPitch   = cosf(view.mPitch);
+	f32 sinPitch   = sinf(view.mPitch);
+
+	Vector3f eye(navi->mSRT.t);
+	eye.x += sinYaw * ModFP::EyeForward;
+	eye.y += ModFP::EyeHeight;
+	eye.z += cosYaw * ModFP::EyeForward;
+
+	f32 flatDist = maxDist;
+	if (sinPitch < 0.0f && cosPitch > 0.01f) {
+		for (f32 t = step; t * cosPitch <= maxDist; t += step) {
+			f32 x = eye.x + sinYaw * cosPitch * t;
+			f32 y = eye.y + sinPitch * t;
+			f32 z = eye.z + cosYaw * cosPitch * t;
+			if (y <= mapMgr->getMinY(x, z, true)) {
+				flatDist = t * cosPitch;
+				break;
+			}
+		}
+	}
+
+	if (flatDist < ModFP::MinCursorDist) {
+		flatDist = ModFP::MinCursorDist;
+	}
+	return Vector3f(sinYaw * flatDist + sinYaw * ModFP::EyeForward, 0.0f, cosYaw * flatDist + cosYaw * ModFP::EyeForward);
+}
+
+// Whether each navi's antenna light is switched off because its player is in first person.
+static bool sFirstPersonLightOff[2];
 #endif
 
 /**
@@ -1798,17 +1840,8 @@ void Navi::makeVelocity(bool isSunset)
 
 #if MOD_FIRSTPERSON
 	if (ModFP::View* view = ModFP::getActiveViewFor(this)) {
-		// Put the cursor on the ground where the player is looking (flat-ground approximation).
-		f32 cursorDist = NAVI_PARM(mCursorMaxRadius);
-		if (view->mPitch < -0.01f) {
-			cursorDist = ModFP::EyeHeight / tanf(-view->mPitch);
-		}
-		if (cursorDist > NAVI_PARM(mCursorMaxRadius)) {
-			cursorDist = NAVI_PARM(mCursorMaxRadius);
-		} else if (cursorDist < ModFP::MinCursorDist) {
-			cursorDist = ModFP::MinCursorDist;
-		}
-		targetPos.set(sinf(view->mYaw) * cursorDist, 0.0f, cosf(view->mYaw) * cursorDist);
+		// Put the cursor on the ground where the player is looking.
+		targetPos = calcFirstPersonCursor(this, *view, NAVI_PARM(mCursorMaxRadius));
 	}
 #endif
 	mCursorPosition       = targetPos;
@@ -2090,8 +2123,34 @@ void Navi::demoDraw(Graphics& gfx, immut Matrix4f* mtx)
 	// Don't draw Olimar's body into his own first-person view (cutscenes, and the other
 	// player's half of a split screen, still show him).
 	if (ModFP::getActiveViewFor(this) != ModFP::sRenderView || movieMode()) {
+#if MOD_COOP
+		ModCoop::tintPlayer2(this, true);
 		mNaviShapeObject->mShape->drawshape(gfx, *gfx.mCamera, nullptr);
+		ModCoop::tintPlayer2(this, false);
+#else
+		mNaviShapeObject->mShape->drawshape(gfx, *gfx.mCamera, nullptr);
+#endif
 	}
+
+	// The antenna light sits right in front of the first-person eye, so switch it off while
+	// this navi is in first person. Cutscenes manage the light themselves, so leave it alone then.
+	if (!movieMode()) {
+		bool lightOff = isFirstPersonNavi(this);
+		if (lightOff != sFirstPersonLightOff[mNaviID & 1]) {
+			if (lightOff) {
+				mNaviLightEfx->stop();
+				mNaviLightGlowEfx->stop();
+			} else {
+				mNaviLightEfx->restart();
+				mNaviLightGlowEfx->restart();
+			}
+			sFirstPersonLightOff[mNaviID & 1] = lightOff;
+		}
+	}
+#elif MOD_COOP
+	ModCoop::tintPlayer2(this, true);
+	mNaviShapeObject->mShape->drawshape(gfx, *gfx.mCamera, nullptr);
+	ModCoop::tintPlayer2(this, false);
 #else
 	mNaviShapeObject->mShape->drawshape(gfx, *gfx.mCamera, nullptr);
 #endif

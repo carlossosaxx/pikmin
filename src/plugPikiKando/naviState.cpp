@@ -12,6 +12,7 @@
 #include "KeyConfig.h"
 #include "Kontroller.h"
 #include "MapCode.h"
+#include "Mod/Coop.h"
 #include "MoviePlayer.h"
 #include "NaviMgr.h"
 #include "Pcam/Camera.h"
@@ -2991,6 +2992,19 @@ void NaviDeadState::restart(Navi* navi)
  */
 void NaviDeadState::init(Navi* navi)
 {
+#if MOD_COOP
+	// Player 2 is only knocked out: they drop their Pikmin and fall over, then get back up at
+	// the ship once the animation ends (see procAnimMsg). The day carries on.
+	if (navi == ModCoop::sPlayer2) {
+		navi->mMotionSpeed = 30.0f;
+		navi->startMotion(PaniMotionInfo(PIKIANIM_ODead, navi), PaniMotionInfo(PIKIANIM_ODead));
+		seSystem->playPlayerSe(SE_PLAYER_DOWN);
+		navi->mVelocity.set(0.0f, 0.0f, 0.0f);
+		navi->mTargetVelocity.set(0.0f, 0.0f, 0.0f);
+		navi->releasePikis();
+		return;
+	}
+#endif
 	GameStat::orimaDead = true;
 	playerState->mResultFlags.setOn(zen::RESFLAG_OlimarDown);
 	gameflow.mGameInterface->message(MOVIECMD_SetPauseAllowed, FALSE);
@@ -3032,6 +3046,13 @@ void NaviDeadState::procAnimMsg(Navi* navi, MsgAnim* msg)
 	switch (msg->mKeyEvent->mEventType) {
 	case KEY_Finished:
 	{
+#if MOD_COOP
+		if (navi == ModCoop::sPlayer2) {
+			ModCoop::respawnPlayer2();
+			transit(navi, NAVISTATE_Walk);
+			break;
+		}
+#endif
 		gameflow.mGameInterface->message(MOVIECMD_GameEndCondition, ENDCAUSE_NaviDown);
 		break;
 	}

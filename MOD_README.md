@@ -46,6 +46,10 @@ You need your own copy of Pikmin (USA Rev 1, game ID `GPIE01`). This repo contai
 
 In split screen, player 1 is on the top half and player 2 is on the bottom. Cutscenes play full screen.
 
+- Player 2 wears a green-tinted suit and has their own health bar, marked "2P". It sits in their half of the screen, or in the bottom-right corner on the shared camera.
+- The HUD's squad count covers both players' Pikmin, and so do the day-end results. Pikmin following either player are safe at sunset.
+- If player 2 goes down, they drop their Pikmin and fall over, then get back up in front of the ship at full health. Only player 1 going down ends the day, as in the original game.
+
 ## Play online with Dolphin NetPlay
 
 The mod needs no netcode. Dolphin NetPlay runs the same game on both computers and shares controller inputs, so a friend's controller becomes controller 2 in your game.
@@ -68,9 +72,9 @@ Tips:
 
 ## Known gaps
 
-- The HUD counts and day-end results only track player 1's Pikmin.
-- If player 2 is downed or left far away at sunset, the game may not handle it well yet.
-- First person: turn direction, eye height, near clipping and the antenna glow need tuning in play. The cursor uses flat-ground maths, so it lands short or long on slopes.
-- Player 2 uses Olimar's model.
+- Untested: the tint on player 2 assumes the game applies a material's colour when it draws the model. If the two Olimars still look identical, that assumption was wrong.
+- First person needs tuning in play. Turn and look direction, eye height and look speed are set in `include/Mod/FirstPerson.h` (`YawSpeed`, `PitchSpeed`, `EyeHeight`).
+- In first person, your own antenna light is switched off so it doesn't cover the view. In split screen, the other player won't see it either while you're in first person.
+- Player 2 uses Olimar's model (Louie only exists from Pikmin 2), tinted.
 
 Mod code lives in `include/Mod/` and in `#if MOD_FIRSTPERSON` / `#if MOD_COOP` blocks in `src/plugPikiNakata/pcamcamera.cpp`, `pcamcameramanager.cpp`, `src/plugPikiKando/navi.cpp`, `naviMgr.cpp`, `gameCoreSection.cpp` and `src/plugPikiColin/newPikiGame.cpp`.
