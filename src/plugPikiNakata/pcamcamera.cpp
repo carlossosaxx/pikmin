@@ -2,6 +2,7 @@
 #include "Creature.h"
 #include "DebugLog.h"
 #include "FlowController.h"
+#include "Mod/FirstPerson.h"
 #include "Graphics.h"
 #include "NaviMgr.h"
 #include "ParaParameters.h"
@@ -24,6 +25,49 @@ DEFINE_ERROR(__LINE__) // Never used in the DLL
  * @note UNUSED Size: 0000F4
  */
 DEFINE_PRINT("pcamcamera")
+
+#if MOD_FIRSTPERSON
+namespace ModFP {
+bool sEnabled  = true;
+bool sIsActive = false;
+f32 sYaw       = 0.0f;
+f32 sPitch     = 0.0f;
+
+bool cStickIsLook(Controller& controller)
+{
+	return !controller.keyDown(KBBTN_Z);
+}
+
+void updateLook(Controller& controller, f32 frameTime)
+{
+	if (controller.keyClick(KBBTN_DPAD_UP)) {
+		sEnabled = !sEnabled;
+	}
+
+	if (!sEnabled || !cStickIsLook(controller)) {
+		return;
+	}
+
+	f32 lookX = controller.getSubStickX();
+	f32 lookY = controller.getSubStickY();
+	if (NMath<f32>::absolute(lookX) < StickDeadZone) {
+		lookX = 0.0f;
+	}
+	if (NMath<f32>::absolute(lookY) < StickDeadZone) {
+		lookY = 0.0f;
+	}
+
+	// Increasing yaw turns left (forward is (sin yaw, 0, cos yaw)), so pushing right subtracts.
+	sYaw = NMathF::roundAngle(sYaw - lookX * YawSpeed * frameTime);
+	sPitch += lookY * PitchSpeed * frameTime;
+	if (sPitch < MinPitch) {
+		sPitch = MinPitch;
+	} else if (sPitch > MaxPitch) {
+		sPitch = MaxPitch;
+	}
+}
+} // namespace ModFP
+#endif
 
 /**
  * @todo: Documentation
@@ -145,6 +189,11 @@ void PcamCamera::startCamera(Creature* target, int zoom, int angle)
 	}
 
 	makeCurrentPosition(target->mFaceDirection + NMathF::pi);
+
+#if MOD_FIRSTPERSON
+	ModFP::sYaw   = target->mFaceDirection;
+	ModFP::sPitch = -0.2f;
+#endif
 }
 
 /**
@@ -212,6 +261,17 @@ void PcamCamera::control(Controller& controller)
 	if (controller.keyDown(KBBTN_X)) {
 		xSubY = controller.getSubStickY();
 	}
+#if MOD_FIRSTPERSON
+	ModFP::updateLook(controller, NSystem::getFrameTime());
+	if (ModFP::sEnabled) {
+		// L snaps the view to where Olimar is facing, like the third-person "attention" snap.
+		if (controller.keyClick(KBBTN_L) && mTargetCreature) {
+			ModFP::sYaw = mTargetCreature->mFaceDirection;
+		}
+		// Zoom, angle and orbit controls make no sense in first person.
+		return;
+	}
+#endif
 	PcamControlInfo info;
 	info.init(true, doRotate, controller.keyClick(KBBTN_L) != 0, controller.keyClick(KBBTN_R) && !controller.keyDown(KBBTN_X), isZClick,
 	          false, false, controller.getMainStickX(), xSubY, controller.getSubStickY());
@@ -288,6 +348,34 @@ void PcamCamera::playCameraSound(int soundID)
  */
 void PcamCamera::update()
 {
+#if MOD_FIRSTPERSON
+	ModFP::sIsActive = false;
+	if (ModFP::sEnabled && mTargetCreature) {
+		updateTimers();
+
+		Vector3f& feet = mTargetCreature->getPosition();
+		f32 sinYaw     = sinf(ModFP::sYaw);
+		f32 cosYaw     = cosf(ModFP::sYaw);
+		f32 cosPitch   = cosf(ModFP::sPitch);
+
+		NVector3f eye(feet.x + sinYaw * ModFP::EyeForward, feet.y + ModFP::EyeHeight, feet.z + cosYaw * ModFP::EyeForward);
+		NVector3f watch(eye.x + sinYaw * cosPitch * ModFP::LookDistance, eye.y + sinf(ModFP::sPitch) * ModFP::LookDistance,
+		                eye.z + cosYaw * cosPitch * ModFP::LookDistance);
+		inputViewpoint(eye);
+		inputWatchpoint(watch);
+		setFov(ModFP::Fov);
+		setBlur(0.0f);
+
+		// Keep the third-person orbit behind the look direction, so toggling back is seamless.
+		mPolarDir.mAzimuth = ModFP::sYaw + NMathF::pi;
+		mPolarDir.roundAzimuth();
+
+		makeMatrix();
+		makeCamera();
+		ModFP::sIsActive = true;
+		return;
+	}
+#endif
 	mCurrDistance = calcCurrentDistance();
 	if (mToggleZoomPending == TRUE) {
 		mZoomLevel++;

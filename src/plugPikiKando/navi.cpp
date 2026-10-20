@@ -18,6 +18,7 @@
 #include "Kontroller.h"
 #include "MapCode.h"
 #include "MemStat.h"
+#include "Mod/FirstPerson.h"
 #include "MoviePlayer.h"
 #include "NaviMgr.h"
 #include "NaviState.h"
@@ -62,6 +63,16 @@ DEFINE_ERROR(89)
  * @note UNUSED Size: 0000F0
  */
 DEFINE_PRINT("navi");
+
+#if MOD_FIRSTPERSON
+/**
+ * @brief Whether the first-person mod is currently looking out of this navi's eyes.
+ */
+static bool isFirstPersonNavi(Navi* navi)
+{
+	return ModFP::sIsActive && cameraMgr && cameraMgr->mCamera->mTargetCreature == navi;
+}
+#endif
 
 /**
  * @todo: Documentation
@@ -1785,6 +1796,21 @@ void Navi::makeVelocity(bool isSunset)
 		targetPos = stickVec2 * step + mCursorPosition;
 	}
 
+#if MOD_FIRSTPERSON
+	if (isFirstPersonNavi(this)) {
+		// Put the cursor on the ground where the player is looking (flat-ground approximation).
+		f32 cursorDist = NAVI_PARM(mCursorMaxRadius);
+		if (ModFP::sPitch < -0.01f) {
+			cursorDist = ModFP::EyeHeight / tanf(-ModFP::sPitch);
+		}
+		if (cursorDist > NAVI_PARM(mCursorMaxRadius)) {
+			cursorDist = NAVI_PARM(mCursorMaxRadius);
+		} else if (cursorDist < ModFP::MinCursorDist) {
+			cursorDist = ModFP::MinCursorDist;
+		}
+		targetPos.set(sinf(ModFP::sYaw) * cursorDist, 0.0f, cosf(ModFP::sYaw) * cursorDist);
+	}
+#endif
 	mCursorPosition       = targetPos;
 	f32 dist              = targetPos.length();
 	mCursorNaviDist       = dist;
@@ -1835,6 +1861,13 @@ void Navi::makeCStick(bool isSunset)
 	if (isSunset) {
 		cStickInput.set(0.0f, 0.0f, 0.0f);
 	}
+
+#if MOD_FIRSTPERSON
+	// In first person the C-stick looks around; hold Z to use it for the swarm instead.
+	if (isFirstPersonNavi(this) && ModFP::cStickIsLook(*mKontroller)) {
+		cStickInput.set(0.0f, 0.0f, 0.0f);
+	}
+#endif
 
 	reviseController(cStickInput);
 
@@ -2053,7 +2086,14 @@ void Navi::demoDraw(Graphics& gfx, immut Matrix4f* mtx)
 {
 	mShadowCaster.mSourcePosition.set(mSRT.t.x + 75.0f, mSRT.t.y + 100.0f, mSRT.t.z + 25.0f);
 	mShadowCaster.mTargetPosition.set(mSRT.t.x, mSRT.t.y + 10.0f, mSRT.t.z);
+#if MOD_FIRSTPERSON
+	// Don't draw Olimar's own body over the first-person view (cutscenes still show him).
+	if (!isFirstPersonNavi(this) || movieMode()) {
+		mNaviShapeObject->mShape->drawshape(gfx, *gfx.mCamera, nullptr);
+	}
+#else
 	mNaviShapeObject->mShape->drawshape(gfx, *gfx.mCamera, nullptr);
+#endif
 	mCollInfo->updateInfo(gfx, false);
 	mNaviLightPosition = mCollInfo->getSphere('ante')->mCentre;
 	mNaviLightEfx->updatePos(mNaviLightPosition);

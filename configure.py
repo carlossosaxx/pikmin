@@ -121,6 +121,12 @@ parser.add_argument(
     help="builds equivalent (but non-matching) or modded objects",
 )
 parser.add_argument(
+    "--mod-first-person",
+    dest="mod_first_person",
+    action="store_true",
+    help="builds the first-person camera mod (implies --non-matching)",
+)
+parser.add_argument(
     "--no-progress",
     dest="progress",
     action="store_false",
@@ -181,6 +187,8 @@ if args.map:
     config.ldflags.append("-mapunused")
 if args.develop:
     config.non_matching = True
+if args.mod_first_person:
+    config.non_matching = True
 
 # Use for any additional files that should cause a re-configure when modified
 config.reconfig_deps = []
@@ -236,6 +244,10 @@ else:
 # DEVELOP flags
 if args.develop:
     cflags_base.extend(["-DDEVELOP=1"])
+
+# Mod flags
+if args.mod_first_person:
+    cflags_base.extend(["-DMOD_FIRSTPERSON=1"])
 
 # JAudio flags
 cflags_jaudio = [
