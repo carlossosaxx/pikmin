@@ -2,6 +2,7 @@
 #include "DebugLog.h"
 #include "Dolphin/os.h"
 #include "MemStat.h"
+#include "Mod/Coop.h"
 #include "gameflow.h"
 #include "sysNew.h"
 
@@ -46,6 +47,12 @@ NaviMgr::NaviMgr()
 	memStat->start("navi animmgr");
 	mNaviShapeObject[0]->mAnimMgr = PikiShapeObject::getAnimMgr();
 	memStat->end("navi animmgr");
+
+#if MOD_COOP
+	// The original only builds a shape object for navi 0, so a second navi would read garbage.
+	mNaviShapeObject[1]           = new PikiShapeObject(mNaviShape);
+	mNaviShapeObject[1]->mAnimMgr = PikiShapeObject::getAnimMgr();
+#endif
 
 	mNaviID = 0;
 	memStat->end("navi shape anim");

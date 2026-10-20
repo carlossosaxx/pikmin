@@ -66,11 +66,11 @@ DEFINE_PRINT("navi");
 
 #if MOD_FIRSTPERSON
 /**
- * @brief Whether the first-person mod is currently looking out of this navi's eyes.
+ * @brief Whether a first-person camera is currently looking out of this navi's eyes.
  */
 static bool isFirstPersonNavi(Navi* navi)
 {
-	return ModFP::sIsActive && cameraMgr && cameraMgr->mCamera->mTargetCreature == navi;
+	return ModFP::getActiveViewFor(navi) != nullptr;
 }
 #endif
 
@@ -1797,18 +1797,18 @@ void Navi::makeVelocity(bool isSunset)
 	}
 
 #if MOD_FIRSTPERSON
-	if (isFirstPersonNavi(this)) {
+	if (ModFP::View* view = ModFP::getActiveViewFor(this)) {
 		// Put the cursor on the ground where the player is looking (flat-ground approximation).
 		f32 cursorDist = NAVI_PARM(mCursorMaxRadius);
-		if (ModFP::sPitch < -0.01f) {
-			cursorDist = ModFP::EyeHeight / tanf(-ModFP::sPitch);
+		if (view->mPitch < -0.01f) {
+			cursorDist = ModFP::EyeHeight / tanf(-view->mPitch);
 		}
 		if (cursorDist > NAVI_PARM(mCursorMaxRadius)) {
 			cursorDist = NAVI_PARM(mCursorMaxRadius);
 		} else if (cursorDist < ModFP::MinCursorDist) {
 			cursorDist = ModFP::MinCursorDist;
 		}
-		targetPos.set(sinf(ModFP::sYaw) * cursorDist, 0.0f, cosf(ModFP::sYaw) * cursorDist);
+		targetPos.set(sinf(view->mYaw) * cursorDist, 0.0f, cosf(view->mYaw) * cursorDist);
 	}
 #endif
 	mCursorPosition       = targetPos;
@@ -2087,8 +2087,9 @@ void Navi::demoDraw(Graphics& gfx, immut Matrix4f* mtx)
 	mShadowCaster.mSourcePosition.set(mSRT.t.x + 75.0f, mSRT.t.y + 100.0f, mSRT.t.z + 25.0f);
 	mShadowCaster.mTargetPosition.set(mSRT.t.x, mSRT.t.y + 10.0f, mSRT.t.z);
 #if MOD_FIRSTPERSON
-	// Don't draw Olimar's own body over the first-person view (cutscenes still show him).
-	if (!isFirstPersonNavi(this) || movieMode()) {
+	// Don't draw Olimar's body into his own first-person view (cutscenes, and the other
+	// player's half of a split screen, still show him).
+	if (ModFP::getActiveViewFor(this) != ModFP::sRenderView || movieMode()) {
 		mNaviShapeObject->mShape->drawshape(gfx, *gfx.mCamera, nullptr);
 	}
 #else

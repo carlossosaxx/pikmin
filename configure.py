@@ -127,6 +127,12 @@ parser.add_argument(
     help="builds the first-person camera mod (implies --non-matching)",
 )
 parser.add_argument(
+    "--mod-coop",
+    dest="mod_coop",
+    action="store_true",
+    help="builds the 2-player co-op mod (implies --non-matching)",
+)
+parser.add_argument(
     "--no-progress",
     dest="progress",
     action="store_false",
@@ -189,6 +195,8 @@ if args.develop:
     config.non_matching = True
 if args.mod_first_person:
     config.non_matching = True
+if args.mod_coop:
+    config.non_matching = True
 
 # Use for any additional files that should cause a re-configure when modified
 config.reconfig_deps = []
@@ -248,6 +256,8 @@ if args.develop:
 # Mod flags
 if args.mod_first_person:
     cflags_base.extend(["-DMOD_FIRSTPERSON=1"])
+if args.mod_coop:
+    cflags_base.extend(["-DMOD_COOP=1"])
 
 # JAudio flags
 cflags_jaudio = [

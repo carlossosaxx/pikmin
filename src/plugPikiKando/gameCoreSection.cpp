@@ -23,6 +23,7 @@
 #include "Kontroller.h"
 #include "MemStat.h"
 #include "Menu.h"
+#include "Mod/Coop.h"
 #include "MoviePlayer.h"
 #include "NaviMgr.h"
 #include "NaviState.h"
@@ -54,6 +55,57 @@
 #include "zen/DrawHurryUp.h"
 #include "zen/ogTutorial.h"
 #include <stddef.h>
+
+#if MOD_COOP
+#include "CPlate.h"
+#include "MapMgr.h"
+
+namespace ModCoop {
+Navi* sPlayer2     = nullptr;
+Camera* sCamera2   = nullptr;
+PcamCamera* sPcam2 = nullptr;
+bool sSplitScreen  = true;
+bool sIsSplitFrame = false;
+
+void update(Controller& player1Controller, Camera* sharedCamera)
+{
+	if (player1Controller.keyClick(KBBTN_DPAD_RIGHT)) {
+		sSplitScreen = !sSplitScreen;
+	}
+
+	// Player 2 walks relative to whichever camera they are watching.
+	if (sPlayer2) {
+		sPlayer2->mNaviCamera = (sSplitScreen && sCamera2) ? sCamera2 : sharedCamera;
+	}
+}
+
+void placePlayer2BesidePlayer1(Navi* player1)
+{
+	if (!sPlayer2 || !player1) {
+		return;
+	}
+
+	// Stand to player 1's right: forward is (sin, 0, cos), so right is (-cos, 0, sin).
+	f32 face = player1->mFaceDirection;
+	Vector3f side(-cosf(face), 0.0f, sinf(face));
+	Vector3f pos = player1->mSRT.t + side * SpawnSideOffset;
+	pos.y        = mapMgr->getMinY(pos.x, pos.z, true);
+
+	sPlayer2->mSRT.t          = pos;
+	sPlayer2->mDayEndPosition = pos;
+	sPlayer2->mFaceDirection  = face;
+	sPlayer2->mSRT.r.set(0.0f, face, 0.0f);
+	if (sPlayer2->mPlateMgr) {
+		sPlayer2->mPlateMgr->init(pos);
+	}
+
+	// Snap player 2's camera to their new spot instead of swooping across the map.
+	if (sPcam2) {
+		sPcam2->makeCurrentPosition(face + PI);
+	}
+}
+} // namespace ModCoop
+#endif
 
 static bool lastDamage;
 static bool currDamage;
@@ -1003,6 +1055,12 @@ void GameCoreSection::initStage()
 		mNavi->mSRT.r.set(0.0f, 0.0f, 0.0f);
 	}
 	mNavi->reset();
+#if MOD_COOP
+	if (ModCoop::sPlayer2) {
+		ModCoop::sPlayer2->mSRT.t = mNavi->mSRT.t;
+		ModCoop::sPlayer2->reset();
+	}
+#endif
 
 	sprintf(path2, "%s%d.gen", path, (gameflow.mWorldClock.mCurrentDay - 1) % MAX_DAYS);
 	data = gsys->openFile(path2);
@@ -1268,6 +1326,10 @@ void GameCoreSection::finalSetup()
 		}
 	}
 
+#if MOD_COOP
+	ModCoop::placePlayer2BesidePlayer1(naviMgr->getNavi());
+#endif
+
 	UfoItem* ufo = itemMgr->getUfo();
 	if (ufo) {
 		if (!playerState->isTutorial()) {
@@ -1400,8 +1462,15 @@ GameCoreSection::GameCoreSection(Controller* controller, MapMgr* mgr, Camera& ca
 	PRINT("================== NAVI ===================\n");
 	memStat->start("navi");
 	naviMgr = new NaviMgr();
+#if MOD_COOP
+	naviMgr->create(ModCoop::NaviCount);
+	mNavi = static_cast<Navi*>(naviMgr->birth());
+	// Born before UtEffectMgr, which already registers a whistle effect for getNavi(1).
+	ModCoop::sPlayer2 = static_cast<Navi*>(naviMgr->birth());
+#else
 	naviMgr->create(1);
 	mNavi = static_cast<Navi*>(naviMgr->birth());
+#endif
 	PRINT("********* navi ==== %x\n", mNavi);
 	gameflow.addGenNode("naviMgr", naviMgr);
 	memStat->end("navi");
@@ -1476,11 +1545,22 @@ GameCoreSection::GameCoreSection(Controller* controller, MapMgr* mgr, Camera& ca
 
 	mNavi->mNaviCamera = &camera;
 	mNavi->init();
+#if MOD_COOP
+	if (ModCoop::sPlayer2) {
+		ModCoop::sPlayer2->mNaviCamera = &camera;
+		ModCoop::sPlayer2->init();
+	}
+#endif
 	camera.mPosition.x = 500.0f * sinf(camera.mRotation.x);
 	camera.mPosition.y = 140.0f;
 	camera.mPosition.z = 500.0f * cosf(camera.mRotation.x);
 	gsys->setFade(1.0f);
 	cameraMgr = new PcamCameraManager(&camera, mNavi->mKontroller);
+#if MOD_COOP
+	ModCoop::sCamera2  = new Camera();
+	*ModCoop::sCamera2 = camera;
+	ModCoop::sPcam2    = new PcamCamera(ModCoop::sCamera2);
+#endif
 	gameflow.addGenNode("cameraMgr", cameraMgr);
 	memStat->end("gamecore");
 
